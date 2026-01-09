@@ -8,6 +8,8 @@ import android.net.Uri;
 import android.os.ParcelFileDescriptor;
 import android.provider.OpenableColumns;
 import android.webkit.MimeTypeMap;
+import android.content.ClipData;
+
 
 import org.apache.cordova.CallbackContext;
 import org.apache.cordova.CordovaPlugin;
@@ -31,6 +33,8 @@ public class Chooser extends CordovaPlugin {
     private static final String TAG = "Chooser";
 
     private CallbackContext callback;
+
+    private JSONObject pluginArgs;
     private int maxFileSize = 0;
 
     @Override
@@ -49,8 +53,11 @@ public class Chooser extends CordovaPlugin {
 
     public void chooseFile(CallbackContext callbackContext, JSONArray args) throws JSONException {
         JSONObject options = args.optJSONObject(0);
+        this.pluginArgs = options;
         String mimeTypes = options.optString("mimeTypes");
         int maxFileSize = options.optInt("maxFileSize");
+
+        boolean allowMultiple = options.optBoolean("allowMultiple");
 
         if (maxFileSize != 0) {
             this.maxFileSize = maxFileSize;
@@ -62,7 +69,7 @@ public class Chooser extends CordovaPlugin {
             intent.putExtra(Intent.EXTRA_MIME_TYPES, mimeTypes.split(","));
         }
         intent.addCategory(Intent.CATEGORY_OPENABLE);
-        intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, false);
+        intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, allowMultiple);
         intent.putExtra(Intent.EXTRA_LOCAL_ONLY, true);
 
         Intent chooser = Intent.createChooser(intent, "Select File");
@@ -74,83 +81,127 @@ public class Chooser extends CordovaPlugin {
         callbackContext.sendPluginResult(pluginResult);
     }
 
+//    @Override
+//    public void onActivityResult(int requestCode, int resultCode, Intent data) {
+//        try {
+//            if (requestCode == Chooser.PICK_FILE_REQUEST && this.callback != null) {
+//                if (resultCode == Activity.RESULT_OK) {
+//                    Uri uri = data.getData();
+//                    if (uri != null) {
+//                        Activity activity = cordova.getActivity();
+//                        ContentResolver contentResolver = activity.getContentResolver();
+//                        InputStream inputStream = contentResolver.openInputStream(uri);
+//                        String displayName = "File";
+//                        String uriString = uri.toString();
+//                        String mimeType = null;
+//                        String extension = null;
+//                        String filePath = null;
+//
+//                        int size = inputStream.available();
+//                        if (this.maxFileSize != 0) {
+//                            if (size > this.maxFileSize) {
+//                                this.callback.error("Invalid size");
+//                                return;
+//                            }
+//                        }
+//
+//                        if (uriString.startsWith("content://")) {
+//                            Cursor cursor = null;
+//                            try {
+//                                cursor = contentResolver.query(uri, null, null, null, null);
+//                                if (cursor != null && cursor.moveToFirst()) {
+//                                    displayName = cursor.getString(cursor.getColumnIndexOrThrow(OpenableColumns.DISPLAY_NAME));
+//                                }
+//                                mimeType = contentResolver.getType(uri);
+//                            } finally {
+//                                assert cursor != null;
+//                                cursor.close();
+//                            }
+//                        } else if (uriString.startsWith("file://")) {
+//                            displayName = new File(uriString).getName();
+//                            String[] parts = uriString.split("\\.");
+//                            String ext = parts[parts.length - 1];
+//                            if (ext != null) {
+//                                MimeTypeMap mime = MimeTypeMap.getSingleton();
+//                                mimeType = mime.getMimeTypeFromExtension(ext);
+//                            }
+//                        }
+//
+//                        if (mimeType != null) {
+//                            MimeTypeMap mime = MimeTypeMap.getSingleton();
+//                            extension = mime.getExtensionFromMimeType(mimeType);
+//                        }
+//
+//                        if (mimeType == null || mimeType.isEmpty()) {
+//                            mimeType = "application/octet-stream";
+//                        }
+//
+//                         filePath = activity.getCacheDir().getAbsolutePath() + '/' + displayName;
+//                         // copyInputStreamToFile(inputStream, filePath);
+//
+//                        try {
+//                            copyInputStreamToFileAsync(uri, filePath,  this.getFileName(displayName), mimeType, extension, size,  this.callback);
+//                            JSONObject result = new JSONObject();
+//                            //result.put("path", uri.toString());
+//                            result.put("path", new File(filePath).exists() ? "file://" + filePath : "");
+//                            result.put("name",  this.getFileName(displayName)); // without extension
+//                            result.put("displayName",  displayName); // with extension
+//                            result.put("mimeType", mimeType);
+//                            result.put("extension", extension);
+//                            result.put("size", size);
+//
+//                           // this.callback.success(result);
+//                        } catch (JSONException e) {
+//                            this.callback.error("JSON Object not supported");
+//                        }
+//
+//                    } else {
+//                        this.callback.error("File URI was null.");
+//                    }
+//                } else if (resultCode == Activity.RESULT_CANCELED) {
+//                    this.callback.success("RESULT_CANCELED");
+//                } else {
+//                    this.callback.error(resultCode);
+//                }
+//            }
+//        } catch (Exception err) {
+//            this.callback.error("Failed to read file: " + err.toString());
+//        }
+//    }
+
     @Override
     public void onActivityResult(int requestCode, int resultCode, Intent data) {
         try {
             if (requestCode == Chooser.PICK_FILE_REQUEST && this.callback != null) {
                 if (resultCode == Activity.RESULT_OK) {
-                    Uri uri = data.getData();
-                    if (uri != null) {
-                        Activity activity = cordova.getActivity();
-                        ContentResolver contentResolver = activity.getContentResolver();
-                        InputStream inputStream = contentResolver.openInputStream(uri);
-                        String displayName = "File";
-                        String uriString = uri.toString();
-                        String mimeType = null;
-                        String extension = null;
-                        String filePath = null;
+                    Activity activity = cordova.getActivity();
+                    ContentResolver contentResolver = activity.getContentResolver();
 
-                        int size = inputStream.available();
-                        if (this.maxFileSize != 0) {
-                            if (size > this.maxFileSize) {
-                                this.callback.error("Invalid size");
-                                return;
+                    JSONArray resultsArray = new JSONArray();
+
+                    // --- Multiple files case ---
+                    if (data.getClipData() != null) {
+                        ClipData clipData = data.getClipData();
+                        for (int i = 0; i < clipData.getItemCount(); i++) {
+                            Uri uri = clipData.getItemAt(i).getUri();
+                            JSONObject fileObj = processUri(activity, contentResolver, uri);
+                            if (fileObj != null) {
+                                resultsArray.put(fileObj);
                             }
                         }
-
-                        if (uriString.startsWith("content://")) {
-                            Cursor cursor = null;
-                            try {
-                                cursor = contentResolver.query(uri, null, null, null, null);
-                                if (cursor != null && cursor.moveToFirst()) {
-                                    displayName = cursor.getString(cursor.getColumnIndexOrThrow(OpenableColumns.DISPLAY_NAME));
-                                }
-                                mimeType = contentResolver.getType(uri);
-                            } finally {
-                                assert cursor != null;
-                                cursor.close();
-                            }
-                        } else if (uriString.startsWith("file://")) {
-                            displayName = new File(uriString).getName();
-                            String[] parts = uriString.split("\\.");
-                            String ext = parts[parts.length - 1];
-                            if (ext != null) {
-                                MimeTypeMap mime = MimeTypeMap.getSingleton();
-                                mimeType = mime.getMimeTypeFromExtension(ext);
-                            }
-                        }
-
-                        if (mimeType != null) {
-                            MimeTypeMap mime = MimeTypeMap.getSingleton();
-                            extension = mime.getExtensionFromMimeType(mimeType);
-                        }
-
-                        if (mimeType == null || mimeType.isEmpty()) {
-                            mimeType = "application/octet-stream";
-                        }
-
-                         filePath = activity.getCacheDir().getAbsolutePath() + '/' + displayName;
-                         // copyInputStreamToFile(inputStream, filePath);
-
-                        try {
-                            copyInputStreamToFileAsync(uri, filePath,  this.getFileName(displayName), mimeType, extension, size,  this.callback);
-                            JSONObject result = new JSONObject();
-                            //result.put("path", uri.toString());
-                            result.put("path", new File(filePath).exists() ? "file://" + filePath : "");
-                            result.put("name",  this.getFileName(displayName)); // without extension
-                            result.put("displayName",  displayName); // with extension
-                            result.put("mimeType", mimeType);
-                            result.put("extension", extension);
-                            result.put("size", size);
-
-                           // this.callback.success(result);
-                        } catch (JSONException e) {
-                            this.callback.error("JSON Object not supported");
-                        }
-
-                    } else {
-                        this.callback.error("File URI was null.");
                     }
+                    // --- Single file case ---
+                    else if (data.getData() != null) {
+                        Uri uri = data.getData();
+                        JSONObject fileObj = processUri(activity, contentResolver, uri);
+                        if (fileObj != null) {
+                            resultsArray.put(fileObj);
+                        }
+                    }
+
+                    // Return array of results
+                    this.callback.success(resultsArray);
+
                 } else if (resultCode == Activity.RESULT_CANCELED) {
                     this.callback.success("RESULT_CANCELED");
                 } else {
@@ -159,6 +210,86 @@ public class Chooser extends CordovaPlugin {
             }
         } catch (Exception err) {
             this.callback.error("Failed to read file: " + err.toString());
+        }
+    }
+
+    /**
+     * Helper method to process a single Uri into a JSONObject
+     */
+    private JSONObject processUri(Activity activity, ContentResolver contentResolver, Uri uri) {
+        try {
+            if (uri == null) return null;
+
+            InputStream inputStream = contentResolver.openInputStream(uri);
+            String displayName = "File";
+            String uriString = uri.toString();
+            String mimeType = null;
+            String extension = null;
+            String filePath = null;
+
+            int size = inputStream.available();
+            if (this.maxFileSize != 0 && size > this.maxFileSize) {
+                this.callback.error("Invalid size");
+                return null;
+            }
+
+            if (uriString.startsWith("content://")) {
+                Cursor cursor = null;
+                try {
+                    cursor = contentResolver.query(uri, null, null, null, null);
+                    if (cursor != null && cursor.moveToFirst()) {
+                        displayName = cursor.getString(cursor.getColumnIndexOrThrow(OpenableColumns.DISPLAY_NAME));
+                    }
+                    mimeType = contentResolver.getType(uri);
+                } finally {
+                    if (cursor != null) cursor.close();
+                }
+            } else if (uriString.startsWith("file://")) {
+                displayName = new File(uriString).getName();
+                String[] parts = uriString.split("\\.");
+                String ext = parts[parts.length - 1];
+                if (ext != null) {
+                    MimeTypeMap mime = MimeTypeMap.getSingleton();
+                    mimeType = mime.getMimeTypeFromExtension(ext);
+                }
+            }
+
+            if (mimeType != null) {
+                MimeTypeMap mime = MimeTypeMap.getSingleton();
+                extension = mime.getExtensionFromMimeType(mimeType);
+            }
+
+            if (mimeType == null || mimeType.isEmpty()) {
+                mimeType = "application/octet-stream";
+            }
+
+            filePath = activity.getCacheDir().getAbsolutePath() + '/' + displayName;
+            String finalFilePath;
+            if(!this.pluginArgs.getBoolean("rawPath")) {
+                // Copy file asynchronously
+                copyInputStreamToFileAsync(uri, filePath, this.getFileName(displayName), mimeType, extension, size, this.callback);
+                finalFilePath = new File(filePath).exists() ? "file://" + filePath : "";
+            }else{
+                finalFilePath = uriString;
+            }
+            JSONObject result = new JSONObject();
+            result.put("path", new File(filePath).exists() ? "file://" + filePath : "");
+
+            // Add raw path if requested.
+            if(this.pluginArgs.getBoolean("rawPath")){
+                result.put("rawPath", finalFilePath);
+            }
+
+            result.put("name", this.getFileName(displayName)); // without extension
+            result.put("displayName", displayName);            // with extension
+            result.put("mimeType", mimeType);
+            result.put("extension", extension);
+            result.put("size", size);
+
+            return result;
+        } catch (Exception e) {
+            this.callback.error("Error processing file: " + e.toString());
+            return null;
         }
     }
 
