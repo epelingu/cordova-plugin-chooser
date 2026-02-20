@@ -26,6 +26,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.channels.FileChannel;
+import java.util.Objects;
 
 public class Chooser extends CordovaPlugin {
     private static final String ACTION_OPEN = "getFile";
@@ -227,7 +228,8 @@ public class Chooser extends CordovaPlugin {
             String extension = null;
             String filePath = null;
 
-            int size = inputStream.available();
+            long size = -1;
+
             if (this.maxFileSize != 0 && size > this.maxFileSize) {
                 this.callback.error("Invalid size");
                 return null;
@@ -239,12 +241,20 @@ public class Chooser extends CordovaPlugin {
                     cursor = contentResolver.query(uri, null, null, null, null);
                     if (cursor != null && cursor.moveToFirst()) {
                         displayName = cursor.getString(cursor.getColumnIndexOrThrow(OpenableColumns.DISPLAY_NAME));
+                        int sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE);
+                        if (sizeIndex != -1) {
+                            size = cursor.getLong(sizeIndex);
+                        }
+
                     }
                     mimeType = contentResolver.getType(uri);
                 } finally {
                     if (cursor != null) cursor.close();
                 }
             } else if (uriString.startsWith("file://")) {
+                File file = new File(Objects.requireNonNull(uri.getPath()));
+                size = file.length();
+
                 displayName = new File(uriString).getName();
                 String[] parts = uriString.split("\\.");
                 String ext = parts[parts.length - 1];
